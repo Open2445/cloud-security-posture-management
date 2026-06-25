@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Award, ShieldCheck, AlertOctagon, HelpCircle, FileText, CheckCircle2, XCircle } from 'lucide-react';
+import { Award, CheckCircle2, XCircle, ShieldAlert, Database } from 'lucide-react';
 
 const Compliance: React.FC = () => {
   const { token, apiUrl } = useAuth();
@@ -35,12 +35,11 @@ const Compliance: React.FC = () => {
     );
   }
 
-  // Helper to check if a specific finding title has active "open" items
-  const hasOpenFinding = (title: string) => {
-    return findings.some(f => f.title === title && f.status === 'open');
+  // Check if a specific finding has open items in db
+  const getOpenFindingForTitle = (title: string) => {
+    return findings.filter(f => f.title === title && f.status === 'open');
   };
 
-  // Define framework controls
   const cisControls = [
     { id: '1.1', name: 'Avoid Use of Root Account', desc: 'Secure root API keys and access root credential sessions only under break-glass audits.', finding: 'Root Account Usage' },
     { id: '1.2', name: 'Enforce MFA for IAM Users', desc: 'Enforce Multi-Factor Authentication (MFA) on all active developer account users.', finding: 'IAM Users without MFA' },
@@ -68,46 +67,71 @@ const Compliance: React.FC = () => {
   ];
 
   const getFrameworkDetails = () => {
-    switch (activeFramework) {
-      case 'cis':
+    let rawControls: any[] = [];
+    if (activeFramework === 'cis') {
+      rawControls = cisControls.map(c => {
+        const matchingOpen = getOpenFindingForTitle(c.finding);
         return {
-          title: 'CIS AWS Foundations Benchmark',
-          subtitle: 'System hardening parameters defined by the Center for Internet Security',
-          controls: cisControls.map(c => ({
-            ...c,
-            status: hasOpenFinding(c.finding) ? 'fail' : 'pass'
-          }))
+          ...c,
+          status: matchingOpen.length > 0 ? 'fail' : 'pass',
+          affected_assets: matchingOpen.map(m => m.asset_id),
+          findings_list: matchingOpen
         };
-      case 'nist':
+      });
+      return {
+        title: 'CIS AWS Foundations Benchmark',
+        subtitle: 'Center for Internet Security guidelines for AWS cloud account baseline hardening',
+        controls: rawControls
+      };
+    } else if (activeFramework === 'nist') {
+      rawControls = nistControls.map(c => {
+        const matchingOpen: any[] = [];
+        c.findings.forEach(fTitle => {
+          matchingOpen.push(...getOpenFindingForTitle(fTitle));
+        });
         return {
-          title: 'NIST CyberSecurity Framework (CSF)',
-          subtitle: 'Standards for infrastructure data protection, access controls, and boundary monitors',
-          controls: nistControls.map(c => ({
-            ...c,
-            status: c.findings.some(f => hasOpenFinding(f)) ? 'fail' : 'pass'
-          }))
+          ...c,
+          status: matchingOpen.length > 0 ? 'fail' : 'pass',
+          affected_assets: matchingOpen.map(m => m.asset_id),
+          findings_list: matchingOpen
         };
-      case 'mitre':
+      });
+      return {
+        title: 'NIST CyberSecurity Framework (CSF)',
+        subtitle: 'Standards for access authorization profiles, storage encryption parameters, and networks monitoring',
+        controls: rawControls
+      };
+    } else {
+      rawControls = mitreControls.map(c => {
+        const matchingOpen: any[] = [];
+        c.findings.forEach(fTitle => {
+          matchingOpen.push(...getOpenFindingForTitle(fTitle));
+        });
         return {
-          title: 'MITRE ATT&CK Cloud Matrix',
-          subtitle: 'Threat vectors, defenses impairment, and credential abuse indicators',
-          controls: mitreControls.map(c => ({
-            ...c,
-            status: c.findings.some(f => hasOpenFinding(f)) ? 'fail' : 'pass'
-          }))
+          ...c,
+          status: matchingOpen.length > 0 ? 'fail' : 'pass',
+          affected_assets: matchingOpen.map(m => m.asset_id),
+          findings_list: matchingOpen
         };
+      });
+      return {
+        title: 'MITRE ATT&CK Cloud Matrix',
+        subtitle: 'Adversary threat categories, lateral assumes, and credential impairment audits',
+        controls: rawControls
+      };
     }
   };
 
   const current = getFrameworkDetails();
-  const passCount = current.controls.filter(c => c.status === 'pass').length;
-  const coveragePercent = Math.round((passCount / current.controls.length) * 100);
+  const passedControls = current.controls.filter(c => c.status === 'pass');
+  const failedControls = current.controls.filter(c => c.status === 'fail');
+  const compliancePercent = Math.round((passedControls.length / current.controls.length) * 100);
 
   return (
     <div>
       <div className="page-header">
         <div>
-          <h2 className="page-title">Compliance Dashboard</h2>
+          <h2 className="page-title">Regulatory Compliance</h2>
           <p className="page-subtitle">Align cloud infrastructure parameters against national standards and attack matrices</p>
         </div>
       </div>
@@ -117,7 +141,7 @@ const Compliance: React.FC = () => {
         {/* Framework Selector Tabs */}
         <div className="glass-panel col-3" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <h3 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700, marginBottom: '0.5rem', letterSpacing: '0.05em' }}>
-            Compliance frameworks
+            Compliance standards
           </h3>
           <button
             onClick={() => setActiveFramework('cis')}
@@ -151,7 +175,7 @@ const Compliance: React.FC = () => {
               transition: 'var(--transition-smooth)'
             }}
           >
-            NIST CSF v1.1
+            NIST CSF v1.1 Standard
           </button>
           <button
             onClick={() => setActiveFramework('mitre')}
@@ -172,102 +196,113 @@ const Compliance: React.FC = () => {
           </button>
         </div>
 
-        {/* Framework Details List */}
+        {/* Detailed framework statistics */}
         <div className="glass-panel col-9" style={{ padding: '2rem' }}>
           
-          {/* Header Progress summary */}
+          {/* Summary metrics header */}
           <div style={{
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
             borderBottom: '1px solid var(--border-color)',
             paddingBottom: '1.5rem',
-            marginBottom: '1.5rem',
-            flexWrap: 'wrap',
-            gap: '1rem'
+            marginBottom: '1.5rem'
           }}>
             <div>
-              <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.3rem', fontWeight: 700 }}>
+              <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', fontWeight: 700 }}>
                 {current.title}
               </h3>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
                 {current.subtitle}
               </p>
             </div>
             
             <div style={{ textAlign: 'right', flexShrink: 0 }}>
-              <div style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--accent-color)', fontFamily: 'var(--font-display)' }}>
-                {coveragePercent}% Passed
+              <div style={{ fontSize: '1.75rem', fontWeight: 800, color: compliancePercent > 70 ? 'var(--status-resolved)' : 'var(--severity-high)', fontFamily: 'var(--font-display)' }}>
+                {compliancePercent}% Compliance
               </div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-                {passCount} of {current.controls.length} controls aligned
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                {passedControls.length} Passed / {failedControls.length} Failed Controls
               </div>
             </div>
           </div>
 
-          {/* Controls Checklist Table */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            {current.controls.map((control) => (
-              <div key={control.id} style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                justifyContent: 'space-between',
-                padding: '1rem',
-                backgroundColor: 'rgba(255, 255, 255, 0.01)',
-                border: '1px solid var(--border-color)',
-                borderRadius: '8px'
-              }}>
-                <div style={{ paddingRight: '1rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span style={{
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: '0.8rem',
-                      fontWeight: 700,
-                      color: 'var(--accent-color)',
-                      backgroundColor: 'rgba(99, 102, 241, 0.08)',
-                      padding: '0.15rem 0.4rem',
-                      borderRadius: '4px'
-                    }}>
-                      {control.id}
-                    </span>
-                    <span style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-primary)' }}>
-                      {control.name}
-                    </span>
+          {/* Sub-grid of Passed and Failed controls */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+            
+            {/* Column 1: FAILED controls */}
+            <div>
+              <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--severity-critical)', display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '1rem' }}>
+                <XCircle size={16} />
+                Failed Controls ({failedControls.length})
+              </h4>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {failedControls.map(c => (
+                  <div key={c.id} style={{
+                    padding: '1rem',
+                    backgroundColor: 'rgba(239, 68, 68, 0.02)',
+                    border: '1px solid rgba(239, 68, 68, 0.15)',
+                    borderRadius: '8px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--severity-critical)' }}>{c.id}</span>
+                      <span style={{ fontWeight: 700, fontSize: '0.85rem' }}>{c.name}</span>
+                    </div>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>{c.desc}</p>
+                    
+                    {/* Affected Assets & Linked Findings */}
+                    <div style={{ marginTop: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '0.5rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                        <Database size={10} />
+                        <span>Affected Assets ({c.affected_assets.length}):</span>
+                      </div>
+                      <div style={{
+                        maxHeight: '60px',
+                        overflowY: 'auto',
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: '0.65rem',
+                        color: 'var(--text-secondary)',
+                        marginTop: '0.2rem',
+                        paddingRight: '0.25rem'
+                      }}>
+                        {c.affected_assets.map((arn: string, idx: number) => (
+                          <div key={idx} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            • {arn.split('/').pop()}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                  <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.4rem', lineHeight: '1.4' }}>
-                    {control.desc}
-                  </p>
-                </div>
-
-                <div style={{ flexShrink: 0, marginTop: '0.2rem' }}>
-                  {control.status === 'pass' ? (
-                    <span style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.25rem',
-                      color: 'var(--severity-low)',
-                      fontSize: '0.75rem',
-                      fontWeight: 700
-                    }}>
-                      <CheckCircle2 size={16} />
-                      PASSED
-                    </span>
-                  ) : (
-                    <span style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.25rem',
-                      color: 'var(--severity-critical)',
-                      fontSize: '0.75rem',
-                      fontWeight: 700
-                    }}>
-                      <XCircle size={16} />
-                      FAILED
-                    </span>
-                  )}
-                </div>
+                ))}
               </div>
-            ))}
+            </div>
+
+            {/* Column 2: PASSED controls */}
+            <div>
+              <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--severity-low)', display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '1rem' }}>
+                <CheckCircle2 size={16} />
+                Passed Controls ({passedControls.length})
+              </h4>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {passedControls.map(c => (
+                  <div key={c.id} style={{
+                    padding: '1rem',
+                    backgroundColor: 'rgba(16, 185, 129, 0.02)',
+                    border: '1px solid rgba(16, 185, 129, 0.15)',
+                    borderRadius: '8px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--severity-low)' }}>{c.id}</span>
+                      <span style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-primary)' }}>{c.name}</span>
+                    </div>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>{c.desc}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
           </div>
 
         </div>

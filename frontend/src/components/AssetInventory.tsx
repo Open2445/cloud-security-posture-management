@@ -1,8 +1,25 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Search, Filter, Server, Eye, X, Globe, FileCode } from 'lucide-react';
+import { 
+  Search, 
+  Filter, 
+  Server, 
+  Eye, 
+  X, 
+  Globe, 
+  FileCode, 
+  ShieldAlert, 
+  GitMerge, 
+  Award, 
+  Clock 
+} from 'lucide-react';
 
-const AssetInventory: React.FC = () => {
+interface AssetInventoryProps {
+  initialSearch?: string;
+  clearInitialSearch?: () => void;
+}
+
+const AssetInventory: React.FC<AssetInventoryProps> = ({ initialSearch, clearInitialSearch }) => {
   const { token, apiUrl } = useAuth();
   const [assets, setAssets] = useState<any[]>([]);
   const [filteredAssets, setFilteredAssets] = useState<any[]>([]);
@@ -11,6 +28,12 @@ const AssetInventory: React.FC = () => {
   const [typeFilter, setTypeFilter] = useState('');
   const [regionFilter, setRegionFilter] = useState('');
   const [selectedAsset, setSelectedAsset] = useState<any>(null);
+  
+  // Selected Asset detail tabs state
+  const [activeDetailTab, setActiveDetailTab] = useState<'meta' | 'findings' | 'relations' | 'compliance' | 'timeline'>('meta');
+  const [assetFindings, setAssetFindings] = useState<any[]>([]);
+  const [assetRelations, setAssetRelations] = useState<any[]>([]);
+  const [assetEvents, setAssetEvents] = useState<any[]>([]);
 
   useEffect(() => {
     const fetchAssets = async () => {
@@ -22,6 +45,17 @@ const AssetInventory: React.FC = () => {
           const data = await res.json();
           setAssets(data);
           setFilteredAssets(data);
+
+          // If there is an initialSearch redirect, trigger it
+          if (initialSearch) {
+            setSearch(initialSearch);
+            // If it's a specific asset ID, select it
+            const matched = data.find((a: any) => a.id.toLowerCase() === initialSearch.toLowerCase());
+            if (matched) {
+              setSelectedAsset(matched);
+            }
+            if (clearInitialSearch) clearInitialSearch();
+          }
         }
       } catch (err) {
         console.error(err);
@@ -30,7 +64,7 @@ const AssetInventory: React.FC = () => {
       }
     };
     fetchAssets();
-  }, [apiUrl, token]);
+  }, [apiUrl, token, initialSearch]);
 
   useEffect(() => {
     let result = assets;
@@ -39,7 +73,8 @@ const AssetInventory: React.FC = () => {
       const lower = search.toLowerCase();
       result = result.filter(a => 
         a.id.toLowerCase().includes(lower) || 
-        a.name.toLowerCase().includes(lower)
+        a.name.toLowerCase().includes(lower) ||
+        a.region.toLowerCase().includes(lower)
       );
     }
 
@@ -54,7 +89,43 @@ const AssetInventory: React.FC = () => {
     setFilteredAssets(result);
   }, [search, typeFilter, regionFilter, assets]);
 
-  // Unique types and regions for filters
+  // Fetch asset details when selected
+  useEffect(() => {
+    if (!selectedAsset) return;
+    const fetchAssetDetails = async () => {
+      try {
+        // Fetch findings
+        const findingsRes = await fetch(`${apiUrl}/api/findings?asset_id=${selectedAsset.id}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (findingsRes.ok) {
+          const fData = await findingsRes.json();
+          setAssetFindings(fData.filter((f: any) => f.asset_id === selectedAsset.id));
+        }
+
+        // Fetch relations
+        const relsRes = await fetch(`${apiUrl}/api/assets/${selectedAsset.id}/relationships`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (relsRes.ok) {
+          setAssetRelations(await relsRes.json());
+        }
+
+        // Fetch events
+        const eventsRes = await fetch(`${apiUrl}/api/events?resource_id=${selectedAsset.id}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (eventsRes.ok) {
+          setAssetEvents(await eventsRes.json());
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    fetchAssetDetails();
+    setActiveDetailTab('meta');
+  }, [selectedAsset, apiUrl, token]);
+
   const assetTypes = Array.from(new Set(assets.map(a => a.type)));
   const assetRegions = Array.from(new Set(assets.map(a => a.region)));
 
@@ -84,8 +155,6 @@ const AssetInventory: React.FC = () => {
         marginBottom: '1.5rem',
         flexWrap: 'wrap'
       }}>
-        
-        {/* Search */}
         <div style={{ position: 'relative', flex: 1, minWidth: '240px' }}>
           <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           <input
@@ -98,7 +167,6 @@ const AssetInventory: React.FC = () => {
           />
         </div>
 
-        {/* Type Filter */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: '180px' }}>
           <Filter size={14} style={{ color: 'var(--text-secondary)' }} />
           <select 
@@ -114,7 +182,6 @@ const AssetInventory: React.FC = () => {
           </select>
         </div>
 
-        {/* Region Filter */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: '180px' }}>
           <Globe size={14} style={{ color: 'var(--text-secondary)' }} />
           <select 
@@ -130,11 +197,9 @@ const AssetInventory: React.FC = () => {
           </select>
         </div>
 
-        {/* Count Indicator */}
         <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
           {filteredAssets.length} of {assets.length} Resources
         </div>
-
       </div>
 
       {/* Asset Grid Table */}
@@ -210,13 +275,13 @@ const AssetInventory: React.FC = () => {
         </div>
       </div>
 
-      {/* Configuration Inspector Sidebar Drawer */}
+      {/* Resource Detail Page Drawer overlay */}
       {selectedAsset && (
         <div style={{
           position: 'fixed',
           top: 0,
           right: 0,
-          width: '500px',
+          width: '650px',
           height: '100vh',
           backgroundColor: '#0c101b',
           borderLeft: '1px solid var(--border-color)',
@@ -227,10 +292,15 @@ const AssetInventory: React.FC = () => {
           padding: '2rem',
           transition: 'var(--transition-smooth)'
         }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-            <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.2rem', fontWeight: 700 }}>
-              Resource Inspector
-            </h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+            <div>
+              <span className="badge badge-medium" style={{ fontSize: '0.65rem' }}>
+                {selectedAsset.type.toUpperCase()}
+              </span>
+              <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', fontWeight: 700, marginTop: '0.25rem' }}>
+                {selectedAsset.name}
+              </h3>
+            </div>
             <button 
               onClick={() => setSelectedAsset(null)} 
               style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
@@ -239,39 +309,191 @@ const AssetInventory: React.FC = () => {
             </button>
           </div>
 
+          {/* Detailed Resource Sub-Tabs Bar */}
+          <div style={{
+            display: 'flex',
+            borderBottom: '1px solid var(--border-color)',
+            marginBottom: '1.5rem',
+            gap: '1rem',
+            overflowX: 'auto',
+            paddingBottom: '0.25rem'
+          }}>
+            {[
+              { id: 'meta', label: 'Overview & Code', icon: FileCode },
+              { id: 'findings', label: `Findings (${assetFindings.length})`, icon: ShieldAlert },
+              { id: 'relations', label: 'Dependencies', icon: GitMerge },
+              { id: 'compliance', label: 'Compliance', icon: Award },
+              { id: 'timeline', label: 'Timeline', icon: Clock }
+            ].map(tab => {
+              const Icon = tab.icon;
+              const isTabActive = activeDetailTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveDetailTab(tab.id as any)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    background: 'none',
+                    border: 'none',
+                    color: isTabActive ? 'var(--accent-color)' : 'var(--text-secondary)',
+                    borderBottom: isTabActive ? '2px solid var(--accent-color)' : '2px solid transparent',
+                    padding: '0.5rem 0.25rem',
+                    cursor: 'pointer',
+                    fontSize: '0.8rem',
+                    fontWeight: isTabActive ? 600 : 500,
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  <Icon size={14} />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Drawer tab content */}
           <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <div>
-              <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Name</label>
-              <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>{selectedAsset.name}</div>
-            </div>
+            {activeDetailTab === 'meta' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                <div>
+                  <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>ARN / Identity String</label>
+                  <div style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', wordBreak: 'break-all', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+                    {selectedAsset.id}
+                  </div>
+                </div>
 
-            <div>
-              <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>ARN / Identifier</label>
-              <div style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', wordBreak: 'break-all', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-                {selectedAsset.id}
-              </div>
-            </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                  <div>
+                    <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Region</label>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>{selectedAsset.region}</div>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Status</label>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--status-resolved)' }}>Active Discovery</div>
+                  </div>
+                </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-              <div>
-                <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Type</label>
-                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--accent-color)' }}>{selectedAsset.type.toUpperCase()}</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Configuration snapshot</label>
+                  <pre className="code-block" style={{ maxHeight: '300px' }}>
+                    {JSON.stringify(selectedAsset.configuration, null, 2)}
+                  </pre>
+                </div>
               </div>
-              <div>
-                <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Region</label>
-                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{selectedAsset.region}</div>
-              </div>
-            </div>
+            )}
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '1rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--text-primary)', fontWeight: 600 }}>
-                <FileCode size={14} style={{ color: 'var(--accent-secondary)' }} />
-                <span>Configuration State</span>
+            {activeDetailTab === 'findings' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {assetFindings.map(f => (
+                  <div key={f.id} style={{
+                    padding: '1rem',
+                    backgroundColor: 'rgba(255,255,255,0.01)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '8px'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <h4 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>{f.title}</h4>
+                      <span className={`badge badge-${f.severity}`}>{f.severity}</span>
+                    </div>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>{f.description}</p>
+                    {f.remediation_cli && (
+                      <div style={{ marginTop: '0.75rem' }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.2rem' }}>CLI Remediation Command</div>
+                        <pre className="code-block" style={{ fontSize: '0.7rem' }}>{f.remediation_cli}</pre>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {assetFindings.length === 0 && (
+                  <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No open vulnerabilities detected for this asset.</div>
+                )}
               </div>
-              <pre className="code-block" style={{ flex: 1, maxHeight: '350px', overflowY: 'auto' }}>
-                {JSON.stringify(selectedAsset.configuration, null, 2)}
-              </pre>
-            </div>
+            )}
+
+            {activeDetailTab === 'relations' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <h4 style={{ fontSize: '0.85rem', fontWeight: 700 }}>Connection Network Mesh</h4>
+                {assetRelations.map((r: any) => {
+                  const isSource = r.source_id === selectedAsset.id;
+                  const partnerNode = isSource ? r.target_id : r.source_id;
+                  return (
+                    <div key={r.id} style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '0.75rem',
+                      backgroundColor: 'rgba(255,255,255,0.01)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: '6px'
+                    }}>
+                      <div>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>
+                          {isSource ? 'Outbound relation' : 'Inbound relation'}
+                        </span>
+                        <div style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', wordBreak: 'break-all', marginTop: '0.15rem' }}>
+                          {partnerNode}
+                        </div>
+                      </div>
+                      <span className="badge badge-medium" style={{ fontSize: '0.6rem' }}>{r.relationship_type}</span>
+                    </div>
+                  );
+                })}
+                {assetRelations.length === 0 && (
+                  <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No active connection edges detected.</div>
+                )}
+              </div>
+            )}
+
+            {activeDetailTab === 'compliance' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <h4 style={{ fontSize: '0.85rem', fontWeight: 700 }}>Regulatory Controls Mappings</h4>
+                {assetFindings.map(f => (
+                  <div key={f.id} style={{
+                    padding: '0.75rem',
+                    backgroundColor: 'rgba(255,255,255,0.01)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '6px'
+                  }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.8rem' }}>{f.title}</div>
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.35rem' }}>
+                      {Object.entries(f.compliance_mappings).map(([fw, rules]: any) => (
+                        <span key={fw} className="badge badge-low" style={{ fontSize: '0.6rem', padding: '0.1rem 0.3rem' }}>
+                          {fw.toUpperCase()}: {rules.join(', ')}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {assetFindings.length === 0 && (
+                  <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>Resource aligns with all active CIS / NIST / MITRE standards.</div>
+                )}
+              </div>
+            )}
+
+            {activeDetailTab === 'timeline' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <h4 style={{ fontSize: '0.85rem', fontWeight: 700 }}>Historical Security Events</h4>
+                {assetEvents.map(e => (
+                  <div key={e.id} style={{
+                    padding: '0.75rem',
+                    backgroundColor: 'rgba(255,255,255,0.01)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '6px'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
+                      <span style={{ fontWeight: 600 }}>{e.event_name}</span>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>{new Date(e.timestamp).toLocaleDateString()}</span>
+                    </div>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>{e.details}</p>
+                  </div>
+                ))}
+                {assetEvents.length === 0 && (
+                  <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No historical events recorded for this resource.</div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -1,142 +1,134 @@
 # Aether CSPM: Enterprise Cloud Security Posture Management Platform
 
-Aether is a production-ready, full-stack Cloud Security Posture Management (CSPM) Platform inspired by Wiz and Prisma Cloud. It performs automated discovery of cloud resources, calculates dynamic business risk scores, detects compliance violations, traces active attack paths, and offers detailed remediation instructions using the AWS CLI and Terraform.
+Aether is an enterprise-grade, full-stack Cloud Security Posture Management (CSPM) Platform inspired by Wiz and Prisma Cloud. It performs automated multi-region asset discovery, analyzes IAM permissions for wildcards and escalations, trace active attack paths, calculates dynamic business risk metrics, maps compliance frameworks, and generates compliance audits.
 
 ---
 
 ## 1. System Architecture
 
-The platform runs inside a multi-container Dockerized topology containing a React + TypeScript frontend, a Python FastAPI backend, and a PostgreSQL database.
+Aether's architecture separates the client interface from the policy scanning engines, PostgreSQL persistence layer, and reporting modules.
 
 ```mermaid
-graph TD
-    Client[React + TS Frontend: Port 3000] -->|REST / JWT Auth| API[FastAPI Backend: Port 8000]
-    API -->|Read/Write Session| DB[(PostgreSQL Database)]
-    API -->|Triggers Scan| Engine[Cloud Asset Discovery Engine]
-    Engine -->|Scans Assets & Traces Paths| DB
-    API -->|Upload Snapshots| Importer[AWS Config Importer]
-    Importer -->|Merges Configurations| DB
-    API -->|Exports| ReportGen[PDF/CSV/JSON Exporters]
+flowchart TD
+    Frontend[Client React UI] -->|REST HTTP / JWT| Backend[FastAPI Backend]
+    
+    subgraph Engine Layers
+        Backend --> Discovery[Cloud Asset Discovery Engine]
+        Backend --> IAM[IAM Analyzer]
+        Backend --> Importer[AWS Config Importer]
+        Backend --> Risk[Risk Engine]
+    end
+    
+    Discovery --> DB[(PostgreSQL Database)]
+    IAM --> DB
+    Importer --> DB
+    Risk --> DB
+    
+    Backend --> Exporters[Reporting Engine: PDF / CSV / JSON]
 ```
 
 ---
 
-## 2. Core Features
+## 2. Pluggable Multi-Cloud Design
 
-### 1. Cloud Asset Discovery Engine
-Discovers and catalogues AWS assets across multiple regions:
-- Compute: **EC2**, **Lambda**
-- Access & Identity: **IAM Users**, **IAM Roles**, **IAM Policies**
-- Storage & Databases: **S3 Buckets**, **RDS Databases**
-- Network: **VPCs**, **Security Groups**
-- Monitoring: **CloudTrail**, **GuardDuty**, **Security Hub**
-
-### 2. Security Misconfiguration & Risk Analyzer
-Detects 14+ specific vulnerabilities, including:
-- Public-facing S3 Buckets and EC2 instances
-- IAM users with MFA disabled or unused access keys
-- Security Groups allowing open ingress (`0.0.0.0/0`) on administration ports
-- Unencrypted EBS block volumes or RDS databases
-- Disabled auditing services (CloudTrail, GuardDuty, Security Hub)
-
-### 3. Attack Path Analysis
-Models threat progression by scanning asset dependencies. It detects critical vectors such as:
-- `Internet ──► Public EC2 ──► IAM Role ──► Admin Policy ──► S3 Bucket`
-- `Public Lambda ──► STS AssumeRole ──► Secrets Manager ──► RDS Database`
-
-### 4. IAM Permission Analyzer
-Audits IAM policies for:
-- Direct attachment of `AdministratorAccess`
-- Wildcard rules (`*`)
-- Privilege Escalation paths (e.g. `iam:CreatePolicyVersion`, `iam:PassRole`)
-- AssumeRole chains and dormant accounts
-
-### 5. Regulatory Compliance Dashboard
-Calculates alignment status indicators for:
-- **CIS AWS Foundations Benchmark v1.4**
-- **NIST CSF v1.1**
-- **MITRE ATT&CK Cloud Matrix**
-
-### 6. AWS Config Snapshot Importer
-Accepts JSON exports of AWS Config snapshots, parsing resource configuration attributes and relationships, and updating security posture calculations on the fly.
-
-### 7. Executive View & Reporting
-Features double-layered dashboards (Executive view and Analyst view) and exports:
-- High-fidelity PDF Executive reports (via ReportLab)
-- CSV files mapping open findings
-- Complete JSON dumps
+The platform uses a pluggable `CloudProvider` abstraction interface allowing multi-cloud extensibility:
+- **AWSProvider**: Active. Pulls and scans S3, EC2, VPC, Security Groups, IAM, CloudTrail, GuardDuty, and Security Hub.
+- **AzureProvider & GCPProvider**: Placeholders implemented in code, marked as "Coming Soon" in the UI sidebar.
 
 ---
 
-## 3. Posture Scoring & Methodologies
+## 3. Database Schema
 
-### 1. Security Posture Score (0-100)
-Calculated via **Resource-Based Deductions**:
-- Every asset starts at health `100`.
-- Deductions: Critical finding (`-30`), High finding (`-15`), Medium finding (`-5`), Low finding (`-1`). Health is capped at minimum `0`.
-- **Overall Posture Score** = Mean average of all asset health scores.
+Aether uses SQLAlchemy to persist resources and scanning history in a PostgreSQL database:
+
+### 1. `users` Table
+- `id` (UUID, Primary Key)
+- `email` (VARCHAR, Unique)
+- `hashed_password` (VARCHAR)
+- `role` (VARCHAR) - `admin`, `analyst`, `viewer`
+- `created_at` (TIMESTAMP)
+
+### 2. `assets` Table
+- `id` (VARCHAR, Primary Key) - ARN or resource ID
+- `name` (VARCHAR)
+- `type` (VARCHAR) - e.g. `ec2`, `s3`, `iam_user`
+- `region` (VARCHAR)
+- `configuration` (JSONB) - Resource configuration properties
+- `created_at` / `updated_at` (TIMESTAMP)
+
+### 3. `findings` Table
+- `id` (UUID, Primary Key)
+- `asset_id` (VARCHAR, Foreign Key -> `assets.id`)
+- `title` (VARCHAR)
+- `description` (TEXT)
+- `severity` (VARCHAR) - `critical`, `high`, `medium`, `low`
+- `status` (VARCHAR) - `open`, `resolved`, `snoozed`
+- `category` (VARCHAR)
+- `compliance_mappings` (JSONB)
+- `remediation_cli` / `remediation_terraform` (TEXT)
+- `business_risk_score` (INTEGER) - 0 to 100
+- `in_attack_path` (BOOLEAN)
+
+### 4. `attack_paths` Table
+- `id` (UUID, Primary Key)
+- `name` (VARCHAR)
+- `risk_level` (VARCHAR)
+- `nodes` (JSONB) - List of hops, e.g. `["Internet", "i-ec2", "s3-bucket"]`
+- `description` (TEXT)
+
+---
+
+## 4. REST API Endpoints
+
+| Method | Endpoint | Description | Role Required |
+|:---|:---|:---|:---|
+| `POST` | `/api/auth/login` | Authenticate and obtain JWT access token | Public |
+| `GET` | `/api/auth/me` | Retrieve currently authenticated user profile | Viewer |
+| `GET` | `/api/providers` | Fetch active and placeholder cloud providers | Viewer |
+| `GET` | `/api/dashboard/stats` | Compile posture dashboard metrics with query filters | Viewer |
+| `GET` | `/api/scan/compare` | Compare security score and findings drift between scans | Viewer |
+| `GET` | `/api/assets` | Query the complete discovered asset inventory | Viewer |
+| `GET` | `/api/findings` | Query all security misconfigurations | Viewer |
+| `PUT` | `/api/findings/{id}/status` | Update finding status (`open`, `resolved`, `snoozed`) | Analyst / Admin |
+| `POST` | `/api/config/import` | Upload AWS Config snapshot JSON dump | Analyst / Admin |
+| `GET` | `/api/reports/pdf` | Generate and download the Executive PDF report | Viewer |
+| `POST` | `/api/scan/trigger` | Manually trigger a fresh cloud asset discovery scan | Analyst / Admin |
+
+---
+
+## 5. Security & Risk Methodologies
+
+### 1. Overall Posture Score (0-100%)
+Assets begin with a health rating of `100`. Points are deducted for open findings linked to them:
+- **Critical** Finding: `-30` points
+- **High** Finding: `-15` points
+- **Medium** Finding: `-5` points
+- **Low** Finding: `-1` point
+*Overall Posture Score = Arithmetic mean of all individual asset health ratings.*
 
 ### 2. Business Risk Score (0-100)
-Assessed per-finding by weighting threat indicators:
-- Base Severity Score: Critical (`50`), High (`30`), Medium (`15`), Low (`5`).
-- Multipliers & Adjusters:
-  - Internet Exposure: `+25`
-  - Administrative Privilege: `+20`
-  - Access to Sensitive Databases: `+20`
-  - Lateral Movement Potential: `+15`
-  - Shared Network Boundary: `+10`
+Calculated dynamically based on:
+- Base Severity (Critical: 50, High: 30, Medium: 15, Low: 5)
+- Internet exposure check: `+25`
+- Administrative / Wildcard privilege profile check: `+20`
+- Target resource database / sensitive tags check: `+20`
+- Privilege escalation capability: `+15`
+- Network boundary shares: `+10`
 
 ---
 
-## 4. Installation & Deployment Guide
+## 6. Installation & Execution Guide
 
-### Prerequisites
-- Docker and Docker Compose installed.
-- Git installed.
+Deploy the multi-container environment via Docker Compose:
+```bash
+docker-compose up --build
+```
+Once initialized, access the panels:
+- **Frontend Panel**: [http://localhost:3000](http://localhost:3000)
+- **API Swagger docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-### Quick Start Deployment
-
-1. **Clone the Repository**:
-   ```bash
-   git clone <repository-url> cloud-security-posture-management
-   cd cloud-security-posture-management
-   ```
-
-2. **Deploy via Docker Compose**:
-   ```bash
-   docker-compose up --build
-   ```
-
-3. **Access Aether CSPM**:
-   - Frontend UI: [http://localhost:3000](http://localhost:3000)
-   - Backend APIs: [http://localhost:8000/docs](http://localhost:8000/docs) (OpenAPI docs)
-
-### Demo Accounts for Testing
-Use the quick-login buttons on the login portal or enter the credentials below:
-- **Admin Role**: `admin@cspm.local` / `admin123`
-- **Analyst Role**: `analyst@cspm.local` / `analyst123`
-- **Viewer Role**: `viewer@cspm.local` / `viewer123`
-
----
-
-## 5. Verification & Testing
-
-### Running Backend Unit Tests
-Execute pytest inside the backend container to verify auth, scoring algebra, and scanner evaluations:
+### Running Tests
+Execute unit tests validating token operations and scoring algorithms:
 ```bash
 docker-compose exec backend pytest -v
 ```
-
-### Testing AWS Config Importer
-1. Log in to Aether as an **Analyst** or **Admin**.
-2. Navigate to **AWS Config Import** page.
-3. Click **Download Sample AWS Config JSON** to save a template.
-4. Upload the downloaded JSON file.
-5. Confirm that the asset inventory increases, new findings are parsed, and the overall security score changes immediately!
-
----
-
-## 6. Future Roadmap
-- **Real Cloud Integrations**: Enable direct IAM/STS cross-account assumption to pull live configurations from real AWS accounts via boto3.
-- **Auto-remediation Hooks**: Trigger AWS Systems Manager (SSM) documents or Lambda functions to automatically revoke open Security Groups and encrypt public S3 buckets.
-- **Kubernetes & Container Security**: Extend posture evaluations to EKS clusters, scanning Docker images for CVE vulnerabilities and mapping cluster network policies.

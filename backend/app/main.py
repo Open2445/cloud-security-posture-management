@@ -1,5 +1,6 @@
 import io
 import json
+import datetime
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
@@ -15,16 +16,14 @@ from app import importer
 from app import reports
 from app import seed
 
-# Create Database tables
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
-    title="Enterprise CSPM Platform API",
-    description="Backend APIs for Cloud Security Posture Management (CSPM) inspired by Wiz and Prisma Cloud.",
-    version="1.0.0"
+    title="Aether CSPM Platform API",
+    description="Backend REST APIs for Enterprise Cloud Security Posture Management (CSPM).",
+    version="1.1.0"
 )
 
-# CORS middleware configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -56,86 +55,149 @@ def get_me(current_user: User = Depends(auth.get_current_user)):
     return current_user
 
 
-# --- Dashboard Statistics Endpoint ---
+# --- Multi-Cloud Provider Endpoint ---
+
+@app.get("/api/providers")
+def get_providers(current_user: User = Depends(auth.get_current_user)):
+    return [
+        {"id": "aws", "name": "Amazon Web Services (AWS)", "status": "active"},
+        {"id": "azure", "name": "Microsoft Azure", "status": "coming_soon"},
+        {"id": "gcp", "name": "Google Cloud Platform (GCP)", "status": "coming_soon"}
+    ]
+
+
+# --- Dashboard Stats with Dynamic Query Filtering ---
 
 @app.get("/api/dashboard/stats", response_model=schemas.DashboardStats)
-def get_dashboard_stats(db: Session = Depends(get_db), current_user: User = Depends(auth.get_current_user)):
-    # Posture Score
-    last_scan = db.query(ScanHistory).filter(ScanHistory.status == "completed").order_by(ScanHistory.started_at.desc()).first()
-    score = int(last_scan.security_score) if last_scan else 100
+def get_dashboard_stats(
+    region: Optional[str] = None,
+    service: Optional[str] = None,
+    severity: Optional[str] = None,
+    framework: Optional[str] = None,
+    resource_type: Optional[str] = None,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth.get_current_user)
+):
+    # Core Queries
+    asset_query = db.query(Asset)
+    finding_query = db.query(Finding)
+
+    # 1. Apply asset-level filters
+    if region:
+        asset_query = asset_query.filter(Asset.region == region)
+        finding_query = finding_query.join(Asset).filter(Asset.region == region)
     
-    # Asset count
-    total_assets = db.query(Asset).count()
+    if service:
+        # Map generic services (compute, storage) to resource types
+        if service.lower() == "ec2":
+            asset_query = asset_query.filter(Asset.type == "ec2")
+            finding_query = finding_query.join(Asset).filter(Asset.type == "ec2")
+        elif service.lower() == "s3":
+            asset_query = asset_query.filter(Asset.type == "s3")
+            finding_query = finding_query.join(Asset).filter(Asset.type == "s3")
+        elif service.lower() == "iam":
+            asset_query = asset_query.filter(Asset.type.in_(["iam_user", "iam_role", "iam_policy"]))
+            finding_query = finding_query.join(Asset).filter(Asset.type.in_(["iam_user", "iam_role", "iam_policy"]))
+
+    if resource_type:
+        asset_query = asset_query.filter(Asset.type == resource_type)
+        finding_query = finding_query.join(Asset).filter(Asset.type == resource_type)
+
+    # 2. Apply finding-level filters
+    if severity:
+        finding_query = finding_query.filter(Finding.severity == severity)
+    if status:
+        finding_query = finding_query.filter(Finding.status == status)
+
+    # Fetch records
+    assets = asset_query.all()
+    all_findings = finding_query.all()
+
+    # Apply Framework filter in Python since mapping is JSON
+    if framework:
+        fw_key = framework.lower()
+        if "cis" in fw_key:
+            all_findings = [f for f in all_findings if "cis" in (f.compliance_mappings or {})]
+        elif "nist" in fw_key:
+            all_findings = [f for f in all_findings if "nist" in (f.compliance_mappings or {})]
+        elif "mitre" in fw_key:
+            all_findings = [f for f in all_findings if "mitre" in (f.compliance_mappings or {})]
+
+    # Calculate metrics based on filtered subset
+    total_assets = len(assets)
+    total_findings = len(all_findings)
+    critical_findings = len([f for f in all_findings if f.severity == "critical"])
     
-    # Findings count
-    total_findings = db.query(Finding).count()
-    critical_findings = db.query(Finding).filter(Finding.severity == "critical").count()
+    # Posture Score: Average health of assets
+    # Starts at 100, deducts based on open findings on that asset
+    total_health = 0.0
+    for asset in assets:
+        asset_open_findings = [f for f in all_findings if f.asset_id == asset.id and f.status == "open"]
+        health = 100.0
+        for f in asset_open_findings:
+            sev = f.severity.lower()
+            if sev == "critical":
+                health -= 30
+            elif sev == "high":
+                health -= 15
+            elif sev == "medium":
+                health -= 5
+            elif sev == "low":
+                health -= 1
+        total_health += max(0.0, health)
     
-    # Attack Path statistics
-    attack_paths = db.query(AttackPath).all()
-    total_attack_paths = len(attack_paths)
-    critical_attack_paths = len([p for p in attack_paths if p.risk_level == "critical"])
+    score = int(total_health / total_assets) if total_assets > 0 else 100
     
-    # Business Risk Score calculation (average of all findings)
-    all_findings = db.query(Finding).all()
-    avg_business_risk = int(sum([f.business_risk_score for f in all_findings]) / len(all_findings)) if all_findings else 0
-    
-    # Compliance Coverage mapping (mock mapping calculations based on passed controls)
-    # E.g. what % of rules are passing?
-    # Total controls checked per framework:
-    # CIS: 10 checks. NIST: 8 checks. MITRE: 6 checks.
-    # Count passed checks:
-    # A check passes if there are no open findings of that category
-    finding_titles = [f.title for f in all_findings if f.status == "open"]
-    
-    cis_total, nist_total, mitre_total = 10, 8, 6
-    cis_fail = len(set([f.title for f in all_findings if f.status == "open" and "cis" in f.compliance_mappings]))
-    nist_fail = len(set([f.title for f in all_findings if f.status == "open" and "nist" in f.compliance_mappings]))
-    mitre_fail = len(set([f.title for f in all_findings if f.status == "open" and "mitre" in f.compliance_mappings]))
-    
-    cis_cov = max(10, 100 - (cis_fail * 12))
-    nist_cov = max(15, 100 - (nist_fail * 15))
-    mitre_cov = max(20, 100 - (mitre_fail * 16))
+    avg_business_risk = int(sum([f.business_risk_score for f in all_findings]) / total_findings) if total_findings > 0 else 0
+
+    # Framework Mappings
+    cis_total, nist_total, mitre_total = 7, 5, 5
+    cis_fail = len(set([f.title for f in all_findings if f.status == "open" and "cis" in (f.compliance_mappings or {})]))
+    nist_fail = len(set([f.title for f in all_findings if f.status == "open" and "nist" in (f.compliance_mappings or {})]))
+    mitre_fail = len(set([f.title for f in all_findings if f.status == "open" and "mitre" in (f.compliance_mappings or {})]))
     
     compliance = {
-        "CIS AWS Foundations": float(cis_cov),
-        "NIST CSF": float(nist_cov),
-        "MITRE ATT&CK": float(mitre_cov)
+        "CIS AWS Foundations": float(max(10, 100 - (cis_fail * 14))),
+        "NIST CSF": float(max(15, 100 - (nist_fail * 20))),
+        "MITRE ATT&CK": float(max(20, 100 - (mitre_fail * 20)))
     }
 
     # Remediation progress
-    open_count = db.query(Finding).filter(Finding.status == "open").count()
-    resolved_count = db.query(Finding).filter(Finding.status == "resolved").count()
-    snoozed_count = db.query(Finding).filter(Finding.status == "snoozed").count()
     remediation_progress = {
-        "open": open_count,
-        "resolved": resolved_count,
-        "snoozed": snoozed_count
+        "open": len([f for f in all_findings if f.status == "open"]),
+        "resolved": len([f for f in all_findings if f.status == "resolved"]),
+        "snoozed": len([f for f in all_findings if f.status == "snoozed"])
     }
 
     # Severity distribution
     findings_by_severity = {
         "critical": critical_findings,
-        "high": db.query(Finding).filter(Finding.severity == "high").count(),
-        "medium": db.query(Finding).filter(Finding.severity == "medium").count(),
-        "low": db.query(Finding).filter(Finding.severity == "low").count()
+        "high": len([f for f in all_findings if f.severity == "high"]),
+        "medium": len([f for f in all_findings if f.severity == "medium"]),
+        "low": len([f for f in all_findings if f.severity == "low"])
     }
 
     # Asset types distribution
-    asset_types = ["ec2", "s3", "iam_user", "iam_role", "iam_policy", "lambda", "rds", "vpc", "security_group", "cloudtrail", "guardduty", "security_hub"]
     asset_types_distribution = {}
-    for t in asset_types:
-        asset_types_distribution[t] = db.query(Asset).filter(Asset.type == t).count()
+    for asset in assets:
+        asset_types_distribution[asset.type] = asset_types_distribution.get(asset.type, 0) + 1
 
     # Resources by region
-    regions_list = db.query(Asset.region).distinct().all()
     resources_by_region = {}
-    for r in regions_list:
-        region_name = r[0]
-        resources_by_region[region_name] = db.query(Asset).filter(Asset.region == region_name).count()
+    for asset in assets:
+        resources_by_region[asset.region] = resources_by_region.get(asset.region, 0) + 1
+
+    # Attack path counts
+    attack_paths = db.query(AttackPath).all()
+    total_attack_paths = len(attack_paths)
+    critical_attack_paths = len([p for p in attack_paths if p.risk_level == "critical"])
 
     # Recent Security Events (last 6)
-    recent_events = db.query(SecurityEvent).order_by(SecurityEvent.timestamp.desc()).limit(6).all()
+    recent_events_query = db.query(SecurityEvent)
+    if region:
+        recent_events_query = recent_events_query.filter(SecurityEvent.region == region)
+    recent_events = recent_events_query.order_by(SecurityEvent.timestamp.desc()).limit(6).all()
 
     return {
         "security_score": score,
@@ -151,6 +213,50 @@ def get_dashboard_stats(db: Session = Depends(get_db), current_user: User = Depe
         "asset_types_distribution": asset_types_distribution,
         "resources_by_region": resources_by_region,
         "recent_events": [schemas.SecurityEventResponse.model_validate(e) for e in recent_events]
+    }
+
+
+# --- Scan Comparison Endpoint ---
+
+@app.get("/api/scan/compare")
+def compare_scans(db: Session = Depends(get_db), current_user: User = Depends(auth.get_current_user)):
+    scans = db.query(ScanHistory).filter(ScanHistory.status == "completed").order_by(ScanHistory.started_at.desc()).all()
+    if not scans:
+        return {
+            "score_change": 0.0,
+            "new_findings": [],
+            "resolved_findings": [],
+            "new_assets": []
+        }
+    
+    latest = scans[0]
+    
+    if len(scans) > 1:
+        previous = scans[1]
+        score_change = round(latest.security_score - previous.security_score, 2)
+        
+        # New assets: added after previous completed
+        new_assets = db.query(Asset).filter(Asset.created_at > previous.completed_at).all()
+        # New findings: created after previous completed
+        new_findings = db.query(Finding).filter(Finding.created_at > previous.completed_at).all()
+        # Resolved findings: updated to resolved state after previous completed
+        resolved_findings = db.query(Finding).filter(
+            Finding.status == "resolved", 
+            Finding.updated_at > previous.completed_at
+        ).all()
+    else:
+        # Compare against baseline (start of history)
+        score_change = round(latest.security_score - 100.0, 2)
+        new_assets = db.query(Asset).all()
+        new_findings = db.query(Finding).filter(Finding.status == "open").all()
+        resolved_findings = db.query(Finding).filter(Finding.status == "resolved").all()
+
+    return {
+        "latest_scan_id": latest.id,
+        "score_change": score_change,
+        "new_findings": [schemas.FindingResponse.model_validate(f) for f in new_findings],
+        "resolved_findings": [schemas.FindingResponse.model_validate(f) for f in resolved_findings],
+        "new_assets": [schemas.AssetResponse.model_validate(a) for a in new_assets]
     }
 
 
@@ -179,7 +285,6 @@ def get_asset(asset_id: str, db: Session = Depends(get_db), current_user: User =
 
 @app.get("/api/assets/{asset_id}/relationships", response_model=List[schemas.AssetRelationshipResponse])
 def get_asset_relationships(asset_id: str, db: Session = Depends(get_db), current_user: User = Depends(auth.get_current_user)):
-    # Returns all relationships where source_id or target_id matches the asset_id
     rels = db.query(AssetRelationship).filter(
         (AssetRelationship.source_id == asset_id) | (AssetRelationship.target_id == asset_id)
     ).all()
@@ -187,19 +292,12 @@ def get_asset_relationships(asset_id: str, db: Session = Depends(get_db), curren
 
 @app.get("/api/assets/graph/all", response_model=Dict[str, Any])
 def get_all_graph_nodes_edges(db: Session = Depends(get_db), current_user: User = Depends(auth.get_current_user)):
-    """
-    Exposes nodes and edges for visualizing relationships.
-    To avoid rendering thousands of nodes, we query a structured sample showing a realistic layout.
-    """
-    # Core assets to display in graph
     assets = db.query(Asset).limit(100).all()
     rels = db.query(AssetRelationship).all()
     
-    # We will filter relationships so they only connect nodes we returned
     asset_ids = set([a.id for a in assets])
     filtered_rels = [r for r in rels if r.source_id in asset_ids and r.target_id in asset_ids]
     
-    # Also find which nodes are in attack paths or misconfigured
     findings = db.query(Finding).filter(Finding.status == "open").all()
     misconfigured_ids = set([f.asset_id for f in findings])
     attack_paths = db.query(AttackPath).all()
@@ -293,7 +391,6 @@ def update_finding_status(
     db.add(event)
     db.commit()
 
-    # Recalculate health posture score
     scanner.calculate_security_score(db)
     
     return finding
@@ -310,9 +407,6 @@ def get_attack_paths(db: Session = Depends(get_db), current_user: User = Depends
 
 @app.get("/api/iam-analyzer", response_model=Dict[str, Any])
 def get_iam_analyzer_summary(db: Session = Depends(get_db), current_user: User = Depends(auth.get_current_user)):
-    """
-    Gathers metrics on AdministratorAccess, wildcards, unused keys, etc.
-    """
     total_users = db.query(Asset).filter(Asset.type == "iam_user").count()
     total_roles = db.query(Asset).filter(Asset.type == "iam_role").count()
     total_policies = db.query(Asset).filter(Asset.type == "iam_policy").count()
@@ -347,7 +441,6 @@ def get_iam_analyzer_summary(db: Session = Depends(get_db), current_user: User =
         Asset.configuration["unused_access_keys"] == True
     ).count()
 
-    # Findings related to IAM
     iam_findings = db.query(Finding).filter(
         (Finding.category == "Access Control") & (Finding.status == "open")
     ).all()
@@ -372,12 +465,8 @@ def get_iam_analyzer_summary(db: Session = Depends(get_db), current_user: User =
 
 @app.get("/api/recommendations", response_model=List[Dict[str, Any]])
 def get_recommendations(db: Session = Depends(get_db), current_user: User = Depends(auth.get_current_user)):
-    """
-    Groups open findings into high-level, actionable tasks with estimated effort scores.
-    """
     findings = db.query(Finding).filter(Finding.status == "open").all()
     
-    # Define recommendations templates
     rec_categories = {
         "Identity Security": {
             "title": "Enforce Identity Access Controls",
@@ -424,7 +513,6 @@ def get_recommendations(db: Session = Depends(get_db), current_user: User = Depe
         elif cat == "Security Monitoring":
             rec_categories["Logging"]["findings"].append(f.id)
 
-    # Convert to list and return only those containing findings
     result = []
     for cat_name, rec in rec_categories.items():
         if rec["findings"]:
@@ -536,6 +624,5 @@ def trigger_scan(
 
 @app.post("/api/admin/seed")
 def trigger_db_seed(db: Session = Depends(get_db)):
-    # Run the database seeder helper
     seed.seed_data(db)
     return {"status": "success", "message": "Demo Database seeded with 300+ AWS Assets and 100+ Findings"}

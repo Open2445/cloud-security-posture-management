@@ -11,14 +11,22 @@ import {
   Flame, 
   FileTerminal,
   Grid,
-  ShieldCheck
+  ShieldCheck,
+  BookOpen,
+  ArrowRight
 } from 'lucide-react';
 
-const Findings: React.FC = () => {
+interface FindingsProps {
+  initialSearch?: string;
+  clearInitialSearch?: () => void;
+}
+
+const Findings: React.FC<FindingsProps> = ({ initialSearch, clearInitialSearch }) => {
   const { token, user, apiUrl } = useAuth();
   const [findings, setFindings] = useState<any[]>([]);
   const [filteredFindings, setFilteredFindings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  
   const [search, setSearch] = useState('');
   const [severityFilter, setSeverityFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('open'); // default to open
@@ -36,6 +44,17 @@ const Findings: React.FC = () => {
         const data = await res.json();
         setFindings(data);
         setFilteredFindings(data);
+
+        // If redirecting from global search
+        if (initialSearch) {
+          setSearch(initialSearch);
+          // Look for title matching initialSearch
+          const matched = data.find((f: any) => f.title.toLowerCase().includes(initialSearch.toLowerCase()));
+          if (matched) {
+            setSelectedFinding(matched);
+          }
+          if (clearInitialSearch) clearInitialSearch();
+        }
       }
     } catch (err) {
       console.error(err);
@@ -46,7 +65,7 @@ const Findings: React.FC = () => {
 
   useEffect(() => {
     fetchFindings();
-  }, [apiUrl, token]);
+  }, [apiUrl, token, initialSearch]);
 
   useEffect(() => {
     let result = findings;
@@ -68,7 +87,6 @@ const Findings: React.FC = () => {
       result = result.filter(f => f.status === statusFilter);
     }
 
-    // Sort by severity (Critical > High > Medium > Low) and Business Risk desc
     const severityWeight: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
     result.sort((a, b) => {
       const weightDiff = (severityWeight[b.severity] || 0) - (severityWeight[a.severity] || 0);
@@ -91,8 +109,6 @@ const Findings: React.FC = () => {
       });
       if (res.ok) {
         const updated = await res.json();
-        
-        // Update findings locally
         setFindings(prev => prev.map(f => f.id === findingId ? updated : f));
         if (selectedFinding && selectedFinding.id === findingId) {
           setSelectedFinding(updated);
@@ -122,6 +138,32 @@ const Findings: React.FC = () => {
     );
   }
 
+  // Hardcoded technical metadata mapping to enrich Finding Detail View
+  const getExtendedDetails = (title: string) => {
+    switch (title) {
+      case 'Public S3 Buckets':
+        return {
+          rootCause: 'Bucket policy allows Principal "*" or ACL contains public read/write grants.',
+          remedEffort: 'Low (SSM / AWS CLI command takes less than 2 minutes)',
+          references: ['https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html', 'https://cisbenchmarks.com/aws/s3-hardening']
+        };
+      case 'IAM Users without MFA':
+        return {
+          rootCause: 'IAM account profile created without virtual/hardware MFA token bindings.',
+          remedEffort: 'Medium (Requires users to sign in and register a mobile MFA application)',
+          references: ['https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_mfa.html', 'https://cisbenchmarks.com/aws/iam-hardening']
+        };
+      default:
+        return {
+          rootCause: 'Misconfigured infrastructure configuration violating AWS cloud posture best practices.',
+          remedEffort: 'Medium (15-30 minutes development and apply cycle)',
+          references: ['https://aws.amazon.com/security/security-hub/', 'https://cisbenchmarks.com/aws/']
+        };
+    }
+  };
+
+  const ext = selectedFinding ? getExtendedDetails(selectedFinding.title) : null;
+
   return (
     <div style={{ position: 'relative' }}>
       <div className="page-header">
@@ -140,8 +182,6 @@ const Findings: React.FC = () => {
         marginBottom: '1.5rem',
         flexWrap: 'wrap'
       }}>
-        
-        {/* Search */}
         <div style={{ position: 'relative', flex: 1, minWidth: '240px' }}>
           <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           <input
@@ -154,7 +194,6 @@ const Findings: React.FC = () => {
           />
         </div>
 
-        {/* Severity filter */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: '150px' }}>
           <AlertTriangle size={14} style={{ color: 'var(--text-secondary)' }} />
           <select 
@@ -171,7 +210,6 @@ const Findings: React.FC = () => {
           </select>
         </div>
 
-        {/* Status filter */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: '150px' }}>
           <ShieldCheck size={14} style={{ color: 'var(--text-secondary)' }} />
           <select 
@@ -187,11 +225,9 @@ const Findings: React.FC = () => {
           </select>
         </div>
 
-        {/* Count */}
         <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
           {filteredFindings.length} of {findings.length} findings
         </div>
-
       </div>
 
       {/* Findings Table */}
@@ -290,13 +326,13 @@ const Findings: React.FC = () => {
         </div>
       </div>
 
-      {/* Remediation Drawer */}
-      {selectedFinding && (
+      {/* Enhanced Finding Detail View Drawer */}
+      {selectedFinding && ext && (
         <div style={{
           position: 'fixed',
           top: 0,
           right: 0,
-          width: '600px',
+          width: '650px',
           height: '100vh',
           backgroundColor: '#0c101b',
           borderLeft: '1px solid var(--border-color)',
@@ -316,7 +352,7 @@ const Findings: React.FC = () => {
                   {selectedFinding.severity}
                 </span>
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                  Risk Index: {selectedFinding.business_risk_score}/100
+                  Business Risk Score: {selectedFinding.business_risk_score}/100
                 </span>
               </div>
               <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', fontWeight: 700, marginTop: '0.25rem' }}>
@@ -331,7 +367,7 @@ const Findings: React.FC = () => {
             </button>
           </div>
 
-          {/* Details */}
+          {/* Finding Details Page */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', flex: 1 }}>
             
             {selectedFinding.in_attack_path && (
@@ -353,16 +389,38 @@ const Findings: React.FC = () => {
             )}
 
             <div>
-              <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Affected Asset ARN</label>
-              <div style={{ fontSize: '0.8rem', fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', wordBreak: 'break-all', marginTop: '0.2rem' }}>
-                {selectedFinding.asset_id}
+              <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Executive Summary</label>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.2rem', lineHeight: '1.4' }}>
+                {selectedFinding.description}
+              </p>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              <div>
+                <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Technical Root Cause</label>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+                  {ext.rootCause}
+                </p>
+              </div>
+              <div>
+                <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Remediation Effort</label>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-primary)', fontWeight: 600, marginTop: '0.2rem' }}>
+                  {ext.remedEffort}
+                </p>
               </div>
             </div>
 
             <div>
-              <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Risk Description & Impact</label>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.2rem', lineHeight: '1.4' }}>
-                {selectedFinding.description}
+              <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Impact Description</label>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+                Unauthorized command executions, data breaches, and non-compliance with industry standards (e.g. NIST CSF).
+              </p>
+            </div>
+
+            <div>
+              <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Affected Cloud Resource</label>
+              <div style={{ fontSize: '0.8rem', fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', wordBreak: 'break-all', marginTop: '0.2rem' }}>
+                {selectedFinding.asset_id}
               </div>
             </div>
 
@@ -372,7 +430,7 @@ const Findings: React.FC = () => {
                 <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--accent-color)', marginTop: '0.1rem' }}>{selectedFinding.category}</div>
               </div>
               <div>
-                <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Compliance Mappings</label>
+                <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Compliance standards</label>
                 <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)', marginTop: '0.1rem' }}>
                   {Object.entries(selectedFinding.compliance_mappings).map(([fw, rules]: any) => (
                     <div key={fw} style={{ fontSize: '0.75rem' }}>
@@ -383,45 +441,62 @@ const Findings: React.FC = () => {
               </div>
             </div>
 
-            {/* Remediation instructions */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.5rem' }}>
-              
-              {/* CLI */}
-              {selectedFinding.reremediation_cli !== "" && (
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                      <FileTerminal size={12} style={{ color: 'var(--accent-color)' }} />
-                      <span>Remediation CLI Command</span>
-                    </div>
-                    <button 
-                      onClick={() => copyToClipboard(selectedFinding.reremediation_cli || selectedFinding.reremediation_cli, 'cli')}
-                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.7rem' }}
-                    >
-                      {copyCliSuccess ? <Check size={10} style={{ color: 'var(--status-resolved)' }} /> : <Copy size={10} />}
-                      {copyCliSuccess ? 'Copied!' : 'Copy'}
-                    </button>
-                  </div>
-                  <pre className="code-block" style={{ fontSize: '0.75rem' }}>
-                    {selectedFinding.remediation_cli || '# CLI command not configured'}
-                  </pre>
+            {/* Attack Path Visualizer diagram inside drawer */}
+            {selectedFinding.in_attack_path && (
+              <div>
+                <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '0.4rem', display: 'block' }}>Attack Vector hops</label>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  backgroundColor: 'rgba(9, 13, 22, 0.4)',
+                  padding: '0.75rem',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border-color)'
+                }}>
+                  <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--accent-color)' }}>Internet</span>
+                  <ArrowRight size={12} style={{ color: 'var(--severity-critical)' }} />
+                  <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--severity-critical)', textDecoration: 'underline' }}>
+                    {selectedFinding.asset_id.split('/').pop().substring(0, 15)}...
+                  </span>
+                  <ArrowRight size={12} style={{ color: 'var(--severity-critical)' }} />
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Target asset</span>
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* Terraform */}
+            {/* CLI / Terraform Remediation snippets */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.5rem' }}>
+              <div>
+                <div style={{ display: 'flex', justifyBetween: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    <FileTerminal size={12} style={{ color: 'var(--accent-color)' }} />
+                    <span>AWS CLI Remediation Guide</span>
+                  </div>
+                  <button 
+                    onClick={() => copyToClipboard(selectedFinding.remediation_cli, 'cli')}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.7rem' }}
+                  >
+                    <Copy size={10} /> Copy
+                  </button>
+                </div>
+                <pre className="code-block" style={{ fontSize: '0.75rem' }}>
+                  {selectedFinding.remediation_cli || '# CLI command not available'}
+                </pre>
+              </div>
+
               {selectedFinding.remediation_terraform && (
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                  <div style={{ display: 'flex', justifyBetween: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-primary)' }}>
                       <Grid size={12} style={{ color: 'var(--accent-secondary)' }} />
-                      <span>Terraform Configuration Code</span>
+                      <span>Terraform Code Remediation</span>
                     </div>
                     <button 
                       onClick={() => copyToClipboard(selectedFinding.remediation_terraform, 'tf')}
                       style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.7rem' }}
                     >
-                      {copyTfSuccess ? <Check size={10} style={{ color: 'var(--status-resolved)' }} /> : <Copy size={10} />}
-                      {copyTfSuccess ? 'Copied!' : 'Copy'}
+                      <Copy size={10} /> Copy
                     </button>
                   </div>
                   <pre className="code-block" style={{ fontSize: '0.75rem', color: '#a78bfa' }}>
@@ -429,10 +504,24 @@ const Findings: React.FC = () => {
                   </pre>
                 </div>
               )}
-
             </div>
 
-            {/* Analyst controls */}
+            {/* References */}
+            <div>
+              <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                <BookOpen size={12} style={{ color: 'var(--accent-color)' }} />
+                Standards References
+              </label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginTop: '0.35rem' }}>
+                {ext.references.map((r, idx) => (
+                  <a key={idx} href={r} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.75rem', color: 'var(--accent-color)', textDecoration: 'underline' }}>
+                    {r}
+                  </a>
+                ))}
+              </div>
+            </div>
+
+            {/* State Controls */}
             {user.role !== 'viewer' && (
               <div style={{
                 borderTop: '1px solid var(--border-color)',

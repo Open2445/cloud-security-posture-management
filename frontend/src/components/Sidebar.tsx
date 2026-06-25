@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   BarChart3, 
   LayoutDashboard, 
@@ -10,7 +10,9 @@ import {
   CheckSquare, 
   Clock, 
   Upload,
-  Lock
+  Lock,
+  Globe,
+  GitCompare
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -19,9 +21,12 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
+  const [provider, setProvider] = useState('aws');
+
   const menuItems = [
     { id: 'executive', label: 'Executive View', icon: BarChart3 },
     { id: 'analyst', label: 'Analyst Dashboard', icon: LayoutDashboard },
+    { id: 'compare', label: 'Scan Comparison', icon: GitCompare },
     { id: 'inventory', label: 'Asset Inventory', icon: Database },
     { id: 'findings', label: 'Security Findings', icon: AlertTriangle },
     { id: 'iam', label: 'IAM Analyzer', icon: KeyRound },
@@ -46,12 +51,12 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
       padding: '1.5rem 1rem',
       zIndex: 100
     }}>
-      {/* Platform Title Logo */}
+      {/* Title Logo */}
       <div style={{
         display: 'flex',
         alignItems: 'center',
         gap: '0.75rem',
-        marginBottom: '2.5rem',
+        marginBottom: '1.5rem',
         padding: '0.5rem'
       }}>
         <div style={{
@@ -84,8 +89,58 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
         </div>
       </div>
 
-      {/* Menu Items */}
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', flex: 1 }}>
+      {/* Pluggable Cloud Provider Abstraction Selector */}
+      <div style={{
+        marginBottom: '1.5rem',
+        padding: '0.5rem',
+        backgroundColor: 'rgba(255, 255, 255, 0.02)',
+        borderRadius: '8px',
+        border: '1px solid var(--border-color)'
+      }}>
+        <label style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '0.25rem', 
+          fontSize: '0.65rem', 
+          color: 'var(--text-muted)', 
+          textTransform: 'uppercase', 
+          fontWeight: 700, 
+          marginBottom: '0.35rem' 
+        }}>
+          <Globe size={10} />
+          Active Cloud Provider
+        </label>
+        <select 
+          value={provider}
+          onChange={(e) => setProvider(e.target.value)}
+          style={{
+            width: '100%',
+            backgroundColor: 'var(--bg-secondary)',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '6px',
+            fontSize: '0.8rem',
+            padding: '0.35rem 0.5rem',
+            cursor: 'pointer',
+            fontFamily: 'var(--font-main)',
+            outline: 'none'
+          }}
+        >
+          <option value="aws">Amazon Web Services (AWS)</option>
+          <option value="azure" disabled>Microsoft Azure (Coming Soon)</option>
+          <option value="gcp" disabled>Google Cloud Platform (GCP) (Coming Soon)</option>
+        </select>
+      </div>
+
+      {/* Menu Navigation */}
+      <nav style={{ 
+        display: 'flex', 
+        flexDirection: 'column', 
+        gap: '0.25rem', 
+        flex: 1, 
+        overflowY: 'auto',
+        paddingRight: '0.1rem' 
+      }}>
         {menuItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
@@ -97,7 +152,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
                 display: 'flex',
                 alignItems: 'center',
                 gap: '0.75rem',
-                padding: '0.75rem 1rem',
+                padding: '0.65rem 0.85rem',
                 border: 'none',
                 borderRadius: '8px',
                 background: isActive ? 'rgba(99, 102, 241, 0.08)' : 'transparent',
@@ -106,28 +161,29 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
                 textAlign: 'left',
                 width: '100%',
                 fontWeight: isActive ? 600 : 500,
-                fontSize: '0.9rem',
+                fontSize: '0.85rem',
                 borderLeft: isActive ? '3px solid var(--accent-color)' : '3px solid transparent',
-                transition: 'var(--transition-smooth)'
+                transition: 'var(--transition-smooth)',
+                flexShrink: 0
               }}
-              className={isActive ? 'glow-active' : ''}
             >
-              <Icon size={18} style={{ color: isActive ? 'var(--accent-color)' : 'inherit' }} />
+              <Icon size={16} style={{ color: isActive ? 'var(--accent-color)' : 'inherit' }} />
               {item.label}
             </button>
           );
         })}
       </nav>
 
-      {/* Footer Info */}
+      {/* Footer System Version */}
       <div style={{
-        padding: '1rem 0.5rem 0 0.5rem',
+        padding: '0.75rem 0.5rem 0 0.5rem',
         borderTop: '1px solid var(--border-color)',
-        fontSize: '0.75rem',
-        color: 'var(--text-muted)'
+        fontSize: '0.7rem',
+        color: 'var(--text-muted)',
+        marginTop: '0.5rem'
       }}>
         <div>System Version: 1.2.0-prod</div>
-        <div>Discovery Engine Active</div>
+        <div>Multi-Cloud Decoders Active</div>
       </div>
     </div>
   );
