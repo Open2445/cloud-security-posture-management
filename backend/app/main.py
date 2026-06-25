@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 
-from app.database import get_db, Base, engine
+from app.database import get_db, Base, engine, SessionLocal
 from app.models import User, Asset, Finding, AssetRelationship, AttackPath, SecurityEvent, ScanHistory
 from app import schemas
 from app import auth
@@ -23,6 +23,18 @@ app = FastAPI(
     description="Backend REST APIs for Enterprise Cloud Security Posture Management (CSPM).",
     version="1.1.0"
 )
+
+@app.on_event("startup")
+def on_startup():
+    db = SessionLocal()
+    try:
+        if db.query(User).count() == 0:
+            print("Autoseeding demo databases...")
+            seed.seed_data(db)
+    except Exception as e:
+        print(f"Startup seed skipped: {e}")
+    finally:
+        db.close()
 
 app.add_middleware(
     CORSMiddleware,
